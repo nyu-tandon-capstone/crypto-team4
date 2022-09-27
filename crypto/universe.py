@@ -1,6 +1,7 @@
 import json
 import requests
 from bs4 import BeautifulSoup
+import cbpro
 
 from crypto.utils import universe_path
 
@@ -21,6 +22,13 @@ def fetch_universe(num):
 
     with open(universe_path, 'w') as universe_file:
         json.dump(universe, universe_file)
+
+
+def coinbase_universe():
+    public_client = cbpro.PublicClient()
+    res = public_client.get_products()
+    products = [i['id'] for i in res]
+    return products
 
 
 if __name__ == '__main__':
