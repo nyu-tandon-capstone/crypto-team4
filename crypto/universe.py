@@ -5,7 +5,8 @@ import cbpro
 
 from crypto.utils import universe_path
 
-NAME_NAME = "d-lg-inline font-normal text-3xs tw-ml-0 md:tw-ml-2 md:tw-self-center tw-text-gray-500 dark:tw-text-white dark:tw-text-opacity-60"
+NAME_CLASS = "d-lg-inline font-normal text-3xs tw-ml-0 md:tw-ml-2 md:tw-self-center tw-text-gray-500 dark:tw-text-white dark:tw-text-opacity-60"
+NAME_CLASS_STABLE = "d-lg-inline font-normal text-3xs tw-ml-0 md:tw-ml-2 md:tw-self-center tw-text-gray-500"
 
 
 def fetch_universe(num):
@@ -13,21 +14,38 @@ def fetch_universe(num):
     res = BeautifulSoup(res.text, features="lxml")
 
     res = res.find('div', {'class': 'coingecko-table'}).find('tbody')
-    res = res.find_all('span', {'class': NAME_NAME})[:num]
+    res = res.find_all('span', {'class': NAME_CLASS})[:num]
 
-    universe = {"USD": [], "BTC": []}
-    for name in res:
-        universe["USD"].append(name.text.strip() + "-USD")
-        universe["BTC"].append(name.text.strip() + "-BTC")
+    stablecoins = _fetch_stablecoin_universe()
+
+    universe = [name.text.strip() for name in res if name.text.strip() not in stablecoins]
 
     with open(universe_path, 'w') as universe_file:
         json.dump(universe, universe_file)
+
+
+def _fetch_stablecoin_universe():
+    res = requests.get(url="https://www.coingecko.com/en/categories/stablecoins?")
+    res = BeautifulSoup(res.text, features="lxml")
+
+    res = res.find_all('span', {'class': NAME_CLASS_STABLE})
+
+    stablecoin_list = [i.text.strip() for i in res]
+    return stablecoin_list
 
 
 def coinbase_universe():
     public_client = cbpro.PublicClient()
     res = public_client.get_products()
     products = [i['id'] for i in res]
+    return products
+
+
+def binance_universe():
+    # NOTE!!! ticker name format from binance is "{base_curr}{quote_curr}". No "-" between names.
+    res = requests.get("https://api.binance.com/api/v3/exchangeInfo")
+    res = res.json()
+    products = [i["symbol"] for i in res["symbols"]]
     return products
 
 

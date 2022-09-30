@@ -1,8 +1,9 @@
-import click
-from crypto import utils
 import os
 from datetime import datetime
-import time
+
+import click
+
+from crypto import utils
 
 
 @click.group()
@@ -21,26 +22,36 @@ def update_universe():
 @cli.command()
 @click.argument("start", nargs=1)
 @click.argument("end", nargs=1)
-def make_price(start, end, base="USD"):
+@click.argument("base", nargs=1)
+@click.argument("source", nargs=1)
+def make_price(start, end, base="USD", source="CB"):
     """build price file"""
 
-    from crypto.price_maker import make_price
-    from crypto.universe import coinbase_universe
+    from crypto.PriceMaker import make_price
     import json
-    import pandas as pd
+    if source == "CB":
+        from crypto.universe import coinbase_universe
+        source_universe = coinbase_universe()
+        ticker_join = '-'
+    elif source == "BN":
+        from crypto.universe import binance_universe
+        source_universe = binance_universe()
+        ticker_join = ''
+    else:
+        raise Exception(f"source {source} undefined")
 
     with open(utils.universe_path, 'r') as universe_file:
-        universe = json.load(universe_file)[base]
-    cb_universe = coinbase_universe()
+        universe = json.load(universe_file)
 
     meta = {}
 
-    for ticker in universe:
-        if ticker not in cb_universe:
-            print(f"{ticker} is not supported in coinbase")
+    for name in universe:
+        ticker = ticker_join.join([name, base])
+        if ticker not in source_universe:
+            print(f"\n{ticker} is not supported in {source}")
             continue
         print(f"\nmaking {ticker}")
-        start_, end_, row_count, na_count = make_price(ticker, start, end)
+        start_, end_, row_count, na_count = make_price(ticker, start, end, source)
 
         # df = pd.read_hdf(os.path.join(utils.price_path, f"{ticker}.h5"))
         meta[ticker] = {"start": str(start_),
@@ -49,7 +60,7 @@ def make_price(start, end, base="USD"):
                         "na": str(na_count),
                         "update": datetime.strftime(datetime.utcnow(), '%Y-%m-%d %H:%M:%S')}
 
-        with open(os.path.join(utils.price_path, "meta.json"), 'r+') as meta_file:
+        with open(os.path.join(utils.price_path, f"{source}/meta.json"), 'r+') as meta_file:
             json.dump(meta, meta_file)
 
 
