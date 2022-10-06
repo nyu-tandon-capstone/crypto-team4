@@ -1,0 +1,10 @@
+{
+  "CLIENT_ID": "sbTrqO9GkWIjtpC2JiUhZw",
+  "SECRET_TOKEN": "vQz9IXAf8AEXsyAEuj2FDESaHFa82Q",
+  "data": {
+    "grant_type": "password",
+    "username": "CRH2002A",
+    "password": "lkj-2000A"
+  },
+  "headers": {"User-Agent": "cryptobot"}
+}

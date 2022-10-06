@@ -22,6 +22,19 @@ def update_universe():
 @cli.command()
 @click.argument("start", nargs=1)
 @click.argument("end", nargs=1)
+@click.argument("channel", nargs=1)
+def make_reddit(start, end, channel):
+    """build text file from reddit"""
+    from crypto.TextMaker import RedditMaker
+
+    r = RedditMaker(channel, start, end)
+
+    r.fetch_text_union(channel)
+
+
+@cli.command()
+@click.argument("start", nargs=1)
+@click.argument("end", nargs=1)
 @click.argument("base", nargs=1)
 @click.argument("source", nargs=1)
 def make_price(start, end, base="USD", source="CB"):
