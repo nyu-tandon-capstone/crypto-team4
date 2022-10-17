@@ -17,7 +17,10 @@ from crypto.utils import text_path
 class RedditMaker:
     NUM_WORKERS = 22
     RATE_LIMIT = 85
-    MAX_SLEEP = 6
+    MAX_SLEEP = 20  # 6
+    LIMIT_TYPE = "backoff"  # "average"
+    JITTER = "full"
+    BASE_BACKOFF = 0.3
     LIMIT = 20000
     DOWN_BEHAVIOR = None  # 'warn', 'stop'
     DAY_S = 86400
@@ -44,6 +47,7 @@ class RedditMaker:
             user_agent=f'python: PMAW request enrichment (by u/CRH2002A)'
         )
         self.api = PushshiftAPI(num_workers=self.NUM_WORKERS, praw=self.reddit, shards_down_behavior=self.DOWN_BEHAVIOR,
+                                limit_type=self.LIMIT_TYPE, jitter=self.JITTER, base_backoff=self.BASE_BACKOFF,
                                 rate_limit=self.RATE_LIMIT, max_sleep=self.MAX_SLEEP)
 
         self.channels = channels
@@ -121,11 +125,6 @@ class RedditMaker:
     def fetch_text_union(self, channel):
         s = self.start
         e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
-        # count_post = 0
-        # count_comment = 0
-
-        # posts = pd.DataFrame(columns=self.POST_COLUMNS)
-        comments = pd.DataFrame(columns=self.COMMENT_COLUMNS)
 
         bar = tqdm(total=int((self.end + self.DAY_S - self.start)/self.STEP))
         while s < self.end + self.DAY_S - 1:
@@ -134,77 +133,45 @@ class RedditMaker:
             post = post.sort_values("created_utc")
             if len(post) >= self.LIMIT:
                 bar.write(f"{str(pd.to_datetime(s, unit='s'))}: post count {len(post)} > {self.LIMIT}")
-            # posts = pd.concat([posts, post], axis=0, ignore_index=True)
-            # count_post += len(post)
+            self.save_text(post, 'p')
 
             bar.set_description(str(pd.to_datetime(s, unit='s')) + ": comments")
-            for post_id in post.id.to_list():
-                comment = self.search_comment_by_post(post_id)
-                comment = comment.sort_values("created_utc")
-                comments = pd.concat([comments, comment], axis=0, ignore_index=True)
-                # count_comment += len(comment)
-
-            self.save_text(post, 'p')
-            self.save_text(comments, 'c')
-            comments = pd.DataFrame(columns=self.COMMENT_COLUMNS)
-
-            # if count_post > self.CHUNK_SIZE:
-            #     self.save_text(posts, 'p')
-            #     posts = pd.DataFrame(columns=self.POST_COLUMNS)
-            #     count_post = 0
-            # if count_comment > self.CHUNK_SIZE:
-            #     self.save_text(comments, 'c')
-            #     comments = pd.DataFrame(columns=self.COMMENT_COLUMNS)
-            #     count_comment = 0
+            comment = self.search_comment_by_post(post.id.to_list())
+            comment = comment.sort_values("created_utc")
+            if len(comment) >= self.LIMIT:
+                bar.write(f"{str(pd.to_datetime(s, unit='s'))}: comment count {len(comment)} > {self.LIMIT}")
+            self.save_text(comment, 'c')
 
             bar.update(1)
             s = e + 1
             e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
 
         bar.close()
-        # if count_post > 0:
-        #     self.save_text(posts, 'p')
-        # if count_comment > 0:
-        #     self.save_text(comments, 'c')
-        # return posts, comments
 
     def fetch_text(self, channel, text_type=None):
         if text_type == 'c':
             search_func = self.search_comment
-            columns = self.COMMENT_COLUMNS
         elif text_type == 'p':
             search_func = self.search_post
-            columns = self.POST_COLUMNS
         else:
             raise Exception(f"text_type {text_type} not supported")
 
         s = self.start
         e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
-        count = 0
         bar = tqdm(total=int((self.end + self.DAY_S - self.start)/self.STEP))
-        texts = pd.DataFrame(columns=columns)
         while s < self.end + self.DAY_S - 1:
             bar.set_description(str(pd.to_datetime(s, unit='s')))
             df = search_func(channel, s, e)
             df = df.sort_values("created_utc")
             if len(df) >= self.LIMIT:
                 bar.write(f"{str(pd.to_datetime(s, unit='s'))}: {len(df)} > {self.LIMIT}")
-            texts = pd.concat([texts, df], axis=0, ignore_index=True)
-            count += len(df)
+            self.save_text(df, text_type)
             bar.update(1)
-
-            if count > self.CHUNK_SIZE:
-                self.save_text(texts, text_type)
-                texts = pd.DataFrame(columns=columns)
-                count = 0
 
             s = e + 1
             e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
 
         bar.close()
-        if count > 0:
-            self.save_text(texts, text_type)
-        # return texts
 
     def search_post(self, channel, start, end):
         posts = self.api.search_submissions(
@@ -224,7 +191,7 @@ class RedditMaker:
 
         return post_df
 
-    def search_comment_by_post(self, post_id):
+    def search_comment_by_post_r(self, post_id):
         post = self.reddit.submission(post_id)
         comments = post.comments
         comments.replace_more()
@@ -243,6 +210,21 @@ class RedditMaker:
                  comment.id, comment.permalink, comment.created_utc, comment.body, comment.body_html,
                  comment.score, comment.downs, comment.ups]
             )
+
+        comment_df = pd.DataFrame(comment_list, columns=self.COMMENT_COLUMNS)
+        comment_df["body_clean"] = comment_df["body_html"].apply(self.__clean_href)
+        comment_df["subreddit"] = comment_df["subreddit"].apply(lambda x: x.display_name)
+
+        return comment_df
+
+    def search_comment_by_post(self, post_ids: list):
+        comments = self.api.search_submission_comment_ids(
+            ids=post_ids,
+            limit=self.LIMIT,
+        )
+
+        f_items = itemgetter(*self.COMMENT_COLUMNS)
+        comment_list = [f_items(comment) for comment in comments if self.__comment_filter(comment)]
 
         comment_df = pd.DataFrame(comment_list, columns=self.COMMENT_COLUMNS)
         comment_df["body_clean"] = comment_df["body_html"].apply(self.__clean_href)
@@ -270,8 +252,8 @@ class RedditMaker:
 
 
 if __name__ == '__main__':
-    c = RedditMaker([], "2018-01-01", "2018-01-02")
-    c.fetch_text_union("CryptoMarkets")  #cryptocurrency,Bitcoin,
+    c = RedditMaker([], "2019-03-18", "2019-03-19")
+    c.fetch_text("CryptoCurrency,CryptoMarkets,Bitcoin,BNBTrader", 'p')  # cryptocurrency,Bitcoin,BNBTrader
     # c.save_text(df, 'c')
     # df = c.search_post("cryptocurrency", 1631232000, 1631318400)
     print('x')
