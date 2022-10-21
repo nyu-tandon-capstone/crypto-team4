@@ -1,4 +1,5 @@
 price_path = "./data/price/"
+text_path = "./data/text/"
 universe_path = "./data/universe.json"
 universe_size = 50
 
@@ -19,3 +20,5 @@ price_config = {
         "rate_limit": 10,
         "chunk_size": 6
     }}
+
+reddit_auth_path = "./redd_auth.json"
