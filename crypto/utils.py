@@ -21,4 +21,4 @@ price_config = {
         "chunk_size": 6
     }}
 
-reddit_auth_path = "./redd_auth.json"
+reddit_auth_path = "./crypto/redd_auth.json"
