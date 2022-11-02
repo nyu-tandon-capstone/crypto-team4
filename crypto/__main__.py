@@ -21,10 +21,11 @@ def update_universe():
 
 @cli.command()
 @click.option("--all/", "-a/", is_flag=True, default=False, help="fetch posts & comments")
+@click.option("--comm/", "-c/", is_flag=True, default=False, help="fetch comments by post ids")
 @click.argument("start", nargs=1)
 @click.argument("end", nargs=1)
 @click.argument("channel", nargs=1)
-def make_reddit(all, start, end, channel):
+def make_reddit(all, comm, start, end, channel):
     """build text file from reddit"""
     from crypto.TextMaker import RedditMaker
 
@@ -32,6 +33,8 @@ def make_reddit(all, start, end, channel):
 
     if all:
         r.fetch_text_union(channel)
+    elif comm:
+        r.fetch_comment_by_post(channel)
     else:
         r.fetch_text(channel, 'p')
 

@@ -20,12 +20,11 @@ class RedditMaker:
     MAX_SLEEP = 20  # 6
     LIMIT_TYPE = "backoff"  # "average"
     JITTER = "full"
-    BASE_BACKOFF = 0.3
-    LIMIT = 20000
+    BASE_BACKOFF = 0.2
+    LIMIT = 50000
     DOWN_BEHAVIOR = None  # 'warn', 'stop'
     DAY_S = 86400
     STEP = 86400 * 1
-    CHUNK_SIZE = 1 * LIMIT
     POST_COLUMNS = [
         "subreddit", "subreddit_subscribers",
         "id", "permalink", "url", "created_utc", "title", "selftext", "selftext_html",
@@ -44,7 +43,8 @@ class RedditMaker:
         self.reddit = praw.Reddit(
             client_id=auth_config.get("CLIENT_ID"),
             client_secret=auth_config.get("SECRET_TOKEN"),
-            user_agent=f'python: PMAW request enrichment (by u/CRH2002A)'
+            user_agent=f'python: PMAW request enrichment (by u/{auth_config.get("data").get("username")})',
+            # ratelimit_seconds=60
         )
         self.api = PushshiftAPI(num_workers=self.NUM_WORKERS, praw=self.reddit, shards_down_behavior=self.DOWN_BEHAVIOR,
                                 limit_type=self.LIMIT_TYPE, jitter=self.JITTER, base_backoff=self.BASE_BACKOFF,
@@ -83,6 +83,7 @@ class RedditMaker:
     @staticmethod
     def save_text(texts, text_type=None):
         texts = texts.rename(columns={"created_utc": "epoch"})
+        texts['date'] = pd.to_datetime(texts.epoch, unit='s').dt.date
 
         if text_type == 'c':
             texts = texts.astype({
@@ -110,16 +111,18 @@ class RedditMaker:
             fastparquet.write(
                 os.path.join(text_path, filename), texts,
                 compression="snappy",
+                file_scheme='hive',
                 write_index=False,
-                partition_on=["subreddit"],
+                partition_on=["date", "subreddit"],
                 append=True
             )
         else:
             fastparquet.write(
                 os.path.join(text_path, filename), texts,
                 compression="snappy",
+                file_scheme='hive',
                 write_index=False,
-                partition_on=["subreddit"]
+                partition_on=["date", "subreddit"]
             )
 
     def fetch_text_union(self, channel):
@@ -173,6 +176,41 @@ class RedditMaker:
 
         bar.close()
 
+    def fetch_comment_by_post(self, channel):
+        s = self.start
+        e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
+        bar = tqdm(total=int((self.end + self.DAY_S - self.start) / self.STEP))
+        posts = fastparquet.ParquetFile(os.path.join(text_path, "reddit/posts.parquet"))
+
+        while s < self.end + self.DAY_S - 1:
+            bar.set_description(str(pd.to_datetime(s, unit='s').date()))
+
+            post_df = posts.to_pandas(
+                columns=['id', 'num_comments', 'subreddit'],
+                filters=[('date', '==', str(pd.to_datetime(s, unit='s').date())),
+                         ('subreddit', 'in', channel.split(','))]
+            )
+            ids = []
+            for sub in channel.split(','):
+                sub_df = post_df[(post_df.subreddit == sub) & (post_df.num_comments != 0)]
+                cutoff = sub_df.num_comments.quantile(0.9)
+                ids.extend(sub_df[sub_df.num_comments > cutoff].id.to_list())
+
+            num_posts = len(ids)
+            num_comments = post_df[post_df.id.isin(ids)].num_comments.sum()
+            bar.set_description(f"{str(pd.to_datetime(s, unit='s').date())}: {num_posts}-{num_comments}")
+            comment = self.search_comment_by_post_r(post_ids=ids)
+            comment = comment.sort_values("created_utc")
+            bar.write(f"{str(pd.to_datetime(s, unit='s').date())}: {num_posts}-{num_comments}-{len(comment)}")
+            self.save_text(comment, 'c')
+            del post_df
+
+            bar.update(1)
+            s = e + 1
+            e = min(s + self.STEP - 1, self.end + self.DAY_S - 1)
+
+        bar.close()
+
     def search_post(self, channel, start, end):
         posts = self.api.search_submissions(
             subreddit=channel,
@@ -191,11 +229,15 @@ class RedditMaker:
 
         return post_df
 
-    def search_comment_by_post_r(self, post_id):
-        post = self.reddit.submission(post_id)
-        comments = post.comments
-        comments.replace_more()
-        comments = comments.list()
+    def search_comment_by_post_r(self, post_ids: list):
+        post_ids = ["t3_"+i for i in post_ids]
+
+        comments = []
+        post_iter = self.reddit.info(fullnames=post_ids)
+        for post in post_iter:
+            comment_obj = post.comments
+            comment_obj.replace_more(limit=48)
+            comments.extend(comment_obj.list())
 
         comment_list = []
         for comment in comments:
@@ -251,12 +293,12 @@ class RedditMaker:
         return comment_df
 
 
-if __name__ == '__main__':
-    c = RedditMaker([], "2019-03-18", "2019-03-19")
-    c.fetch_text("CryptoCurrency,CryptoMarkets,Bitcoin,BNBTrader", 'p')  # cryptocurrency,Bitcoin,BNBTrader
+# if __name__ == '__main__':
+#     c = RedditMaker([], "2019-03-18", "2019-03-19")
+#     c.fetch_text("CryptoCurrency,CryptoMarkets,Bitcoin,BNBTrader", 'p')  # cryptocurrency,Bitcoin,BNBTrader
     # c.save_text(df, 'c')
     # df = c.search_post("cryptocurrency", 1631232000, 1631318400)
-    print('x')
+    # print('x')
     # print(a.head())
     # print(b.head())
     #
