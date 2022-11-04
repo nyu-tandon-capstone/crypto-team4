@@ -6,6 +6,7 @@ import cbpro
 from crypto.utils import universe_path
 
 NAME_CLASS = "d-lg-inline font-normal text-3xs tw-ml-0 md:tw-ml-2 md:tw-self-center tw-text-gray-500 dark:tw-text-white dark:tw-text-opacity-60"
+NAME_LONG_CLASS = "lg:tw-flex font-bold tw-items-center tw-justify-between"
 NAME_CLASS_STABLE = "d-lg-inline font-normal text-3xs tw-ml-0 md:tw-ml-2 md:tw-self-center tw-text-gray-500"
 
 
@@ -14,11 +15,17 @@ def fetch_universe(num):
     res = BeautifulSoup(res.text, features="lxml")
 
     res = res.find('div', {'class': 'coingecko-table'}).find('tbody')
-    res = res.find_all('span', {'class': NAME_CLASS})[:num]
+    res_short = res.find_all('span', {'class': NAME_CLASS})[:num]
+    res_long = res.find_all('span', {'class': NAME_LONG_CLASS})[:num]
 
     stablecoins = _fetch_stablecoin_universe()
 
-    universe = [name.text.strip() for name in res if name.text.strip() not in stablecoins]
+    universe = [[], []]
+    for i in range(num):
+        if res_short[i].text.strip() in stablecoins:
+            continue
+        universe[0].append(res_short[i].text.strip())
+        universe[1].append(res_long[i].text.strip())
 
     with open(universe_path, 'w') as universe_file:
         json.dump(universe, universe_file)

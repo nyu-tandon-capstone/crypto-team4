@@ -61,7 +61,7 @@ def make_price(start, end, base="USD", source="CB"):
         raise Exception(f"source {source} undefined")
 
     with open(utils.universe_path, 'r') as universe_file:
-        universe = json.load(universe_file)
+        universe = json.load(universe_file)[0]
 
     meta = {}
 
@@ -82,6 +82,31 @@ def make_price(start, end, base="USD", source="CB"):
 
         with open(os.path.join(utils.price_path, f"{source}/meta.json"), 'r+') as meta_file:
             json.dump(meta, meta_file)
+
+
+@cli.command()
+@click.option("--freq", "-f")
+@click.option("--source", "-s", default='BN')
+@click.option("--base", "-b", default='USDT')
+def make_tech_price(source='BN', freq=None, base='USDT'):
+    from crypto.PriceMaker import make_price_tech
+
+    import json
+
+    with open(utils.universe_path, 'r') as universe_file:
+        universe = json.load(universe_file)[0]
+
+    if source == "CB":
+        ticker_join = '-'
+    elif source == "BN":
+        ticker_join = ''
+    else:
+        raise Exception(f"source {source} undefined")
+
+    for name in universe:
+        ticker = ticker_join.join([name, base])
+        print(f'making {ticker}')
+        make_price_tech(ticker, source, freq, True)
 
 
 if __name__ == '__main__':

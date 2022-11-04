@@ -1,6 +1,8 @@
 import os
 import time
 import warnings
+import json
+from operator import itemgetter
 
 import cbpro
 import numpy as np
@@ -8,14 +10,92 @@ import pandas as pd
 from tables import NaturalNameWarning
 from tqdm import tqdm
 import requests
+import talib
+from talib import abstract
 
 from crypto.utils import price_path, price_config
+
+TECH_GROUPS = ['Cycle Indicators', 'Momentum Indicators', 'Overlap Studies', 'Pattern Recognition', 'Price Transform',
+               'Statistic Functions', 'Volatility Indicators', 'Volume Indicators']
 
 warnings.filterwarnings('ignore', category=NaturalNameWarning)
 
 public_client = cbpro.PublicClient()
 
 rate_ctrl_t = []
+
+
+def get_tech_factor(price):
+    tech_factors = itemgetter(*TECH_GROUPS)(talib.get_function_groups())
+    tech_factors = [factor for group in tech_factors for factor in group]
+    tech_factors.remove('MAVP')
+
+    factor_results = []
+    for func in tech_factors:
+        factor = eval('abstract.' + func)(price)
+        if isinstance(factor, pd.Series):
+            factor.name = func
+        elif isinstance(factor, pd.DataFrame):
+            factor.columns = ['_'.join([func, col]) for col in factor.columns]
+        factor_results.append(factor)
+
+    return pd.concat(factor_results, axis=1)
+
+
+def make_price_tech(ticker, source, freq=None, save=False):
+    """
+    return clean price & tech indicators
+    """
+    try:
+        price = get_clean_price(ticker, source, freq)
+    except Exception as e:
+        return f"{ticker} failed", e
+    factor = get_tech_factor(price[['open', 'high', 'low', 'close', 'volume']])
+
+    df = pd.concat([price, factor], axis=1).dropna()
+
+    if save:
+        if freq is None:
+            freq = '1min'
+        df.to_hdf(os.path.join(price_path, f"price_clean/{ticker}-{freq}.h5"),
+                  key=ticker + '-' + freq,
+                  mode='w',
+                  format='table',
+                  complevel=5)
+    else:
+        return df
+
+
+def get_clean_price(ticker, source, freq=None):
+    with open(os.path.join(price_path, f"{source}/meta.json"), 'r') as f:
+        meta = json.load(f)
+    meta = meta.get(ticker)
+    start_dt = pd.to_datetime(meta.get('start')).timestamp()
+
+    if not os.path.exists(os.path.join(price_path, f"{source}/{ticker}.h5")):
+        raise Exception(f"{ticker} does not exist on disk")
+    price_df = pd.read_hdf(os.path.join(price_path, f"{source}/{ticker}.h5"), where=f"epoch>={start_dt}")
+    price_df['datetime'] = pd.to_datetime(price_df.epoch, unit='s')
+    price_df.set_index('datetime', inplace=True)
+    price_df.drop('epoch', axis=1, inplace=True)
+
+    if freq is not None:
+        price_df_freq = price_df.resample(freq, label='right', closed='right', origin='start_day').agg(
+            {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum', 'amount': 'sum',
+             'count': 'sum'}
+        )
+    else:
+        price_df_freq = price_df
+
+    price_df_freq.close.fillna(method='ffill', inplace=True)
+    price_df_freq.fillna(
+        {'open': price_df_freq.close, 'high': price_df_freq.close, 'low': price_df_freq.close, 'volume': 0, 'amount': 0,
+         'count': 0},
+        inplace=True
+    )
+    price_df_freq.dropna(inplace=True)
+
+    return price_df
 
 
 def make_price(ticker, start, end, source):
@@ -142,7 +222,7 @@ def price_cb(ticker, start, end, bar=None):
 
         price = pd.DataFrame(price[:, 1:].astype(float), index=price[:, 0].astype(int),
                              columns=["high", "low", "open", "close", "volume"])
-        price = price.reindex(range(int(start.timestamp()), int(end.timestamp())+60, 60))
+        price = price.reindex(range(int(start.timestamp()), int(end.timestamp()) + 60, 60))
         price.index.name = "epoch"
         price.reset_index(inplace=True)
         return price
@@ -158,8 +238,8 @@ def price_bn(ticker, start, end, bar=None):
             __rate_limit()
             price = requests.get(
                 url=f"https://api.binance.com/api/v3/klines?symbol={ticker}&interval=1m"
-                    f"&startTime={1000*int(start.timestamp())}"
-                    f"&endTime={1000*int(end.timestamp())}&limit=1000"
+                    f"&startTime={1000 * int(start.timestamp())}"
+                    f"&endTime={1000 * int(end.timestamp())}&limit=1000"
             )
             if price.status_code != 200:
                 bar.write(price.status_code)
@@ -188,9 +268,9 @@ def price_bn(ticker, start, end, bar=None):
         # price[:, 0] = price[:, 0]/1000
         price = np.delete(price, [6, 9, 10, 11], axis=1)
 
-        price = pd.DataFrame(price[:, 1:].astype(float), index=(price[:, 0].astype(np.int64)/1000).astype(int),
+        price = pd.DataFrame(price[:, 1:].astype(float), index=(price[:, 0].astype(np.int64) / 1000).astype(int),
                              columns=["open", "high", "low", "close", "volume", "amount", "count"])
-        price = price.reindex(range(int(start.timestamp()), int(end.timestamp())+60, 60))
+        price = price.reindex(range(int(start.timestamp()), int(end.timestamp()) + 60, 60))
         price.index.name = "epoch"
         price.reset_index(inplace=True)
 
@@ -222,7 +302,7 @@ def _price_bn_earliest(ticker, start):
     if price.ndim != 2:
         return start
 
-    return pd.to_datetime(price[0, 0].astype(np.int64)/1000, unit='s')
+    return pd.to_datetime(price[0, 0].astype(np.int64) / 1000, unit='s')
 
 
 if __name__ == '__main__':
@@ -234,4 +314,3 @@ if __name__ == '__main__':
     # input()
 
     # 'BTC-USD', '2021-09-18', '2022-09-18', True
-
